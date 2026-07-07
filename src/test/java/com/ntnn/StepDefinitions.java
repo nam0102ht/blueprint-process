@@ -81,10 +81,8 @@ public class StepDefinitions {
         Assertions.assertTrue(dbReady, "OracleDB is not ready");
 
         System.out.println("Services are ready. Initializing DB schema...");
-        dbClient = new DatabaseClient(actualJdbcUrl, dbUser, dbPass);
-        
         // Clean up schema for a fresh test run
-        try (java.sql.Connection conn = dbClient.getDataSource().getConnection();
+        try (java.sql.Connection conn = DriverManager.getConnection(actualJdbcUrl, dbUser, dbPass);
              Statement stmt = conn.createStatement()) {
             try {
                 stmt.execute("DROP TABLE TEST_RESULTS");
@@ -93,6 +91,8 @@ public class StepDefinitions {
                 stmt.execute("DROP TABLE STDF_LOTS");
             } catch (Exception ignored) {}
         }
+
+        dbClient = new DatabaseClient(actualJdbcUrl, dbUser, dbPass);
         
         dbClient.initializeSchema();
         activeMqClient = new ActiveMqClient(brokerUrl, mqUser, mqPass);
@@ -130,7 +130,7 @@ public class StepDefinitions {
 
     @Then("{int} lot record for {string} should be present in OracleDB")
     public void verifyLotRecordInDb(int expectedCount, String lotId) throws Exception {
-        try (java.sql.Connection conn = dbClient.getDataSource().getConnection();
+        try (java.sql.Connection conn = DriverManager.getConnection(actualJdbcUrl, dbUser, dbPass);
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery("SELECT count(*) FROM STDF_LOTS WHERE LOT_ID = '" + lotId + "'")) {
             rs.next();
@@ -141,7 +141,7 @@ public class StepDefinitions {
 
     @Then("{int} test results for lot {string} should be present in OracleDB")
     public void verifyTestResultsInDb(int expectedCount, String lotId) throws Exception {
-        try (java.sql.Connection conn = dbClient.getDataSource().getConnection();
+        try (java.sql.Connection conn = DriverManager.getConnection(actualJdbcUrl, dbUser, dbPass);
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery("SELECT count(*) FROM TEST_RESULTS WHERE LOT_ID = '" + lotId + "'")) {
             rs.next();
