@@ -2,42 +2,28 @@ package com.ntnn.messaging;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ntnn.stdf.StdfRecord;
-import jakarta.jms.Connection;
-import jakarta.jms.Destination;
-import jakarta.jms.MessageProducer;
-import jakarta.jms.Session;
-import jakarta.jms.TextMessage;
-import org.apache.activemq.ActiveMQConnectionFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jms.core.JmsTemplate;
+import org.springframework.stereotype.Service;
 
-public class ActiveMqClient implements AutoCloseable {
-    private final Connection connection;
+@Service
+public class ActiveMqClient {
+    private final JmsTemplate jmsTemplate;
     private final ObjectMapper objectMapper;
 
-    public ActiveMqClient(String brokerUrl, String username, String password) throws Exception {
-        ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory(brokerUrl);
-        factory.setUserName(username);
-        factory.setPassword(password);
-        this.connection = factory.createConnection();
-        this.connection.start();
+    @Autowired
+    public ActiveMqClient(JmsTemplate jmsTemplate) {
+        this.jmsTemplate = jmsTemplate;
         this.objectMapper = new ObjectMapper();
     }
 
     public void publishRecord(String queueName, StdfRecord record) throws Exception {
-        // Create session and producer inside the thread context (JMS Sessions are not thread-safe)
-        try (Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE)) {
-            Destination destination = session.createQueue(queueName);
-            try (MessageProducer producer = session.createProducer(destination)) {
-                String json = objectMapper.writeValueAsString(record);
-                TextMessage message = session.createTextMessage(json);
-                producer.send(message);
-            }
-        }
+        String json = objectMapper.writeValueAsString(record);
+        // JmsTemplate is thread-safe and manages session/producer creation under the hood
+        jmsTemplate.send(queueName, session -> session.createTextMessage(json));
     }
 
-    @Override
-    public void close() throws Exception {
-        if (connection != null) {
-            connection.close();
-        }
+    public void publishFilePath(String queueName, String filePath) {
+        jmsTemplate.send(queueName, session -> session.createTextMessage(filePath));
     }
 }

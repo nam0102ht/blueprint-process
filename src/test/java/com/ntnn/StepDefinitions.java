@@ -1,18 +1,20 @@
 package com.ntnn;
 
-import com.ntnn.database.DatabaseClient;
 import com.ntnn.messaging.ActiveMqClient;
-import com.ntnn.pipeline.PipelineDispatcher;
 import com.ntnn.testutil.StdfTestWriter;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
+import io.cucumber.spring.CucumberContextConfiguration;
 import jakarta.jms.Connection;
 import jakarta.jms.Message;
 import jakarta.jms.MessageConsumer;
 import jakarta.jms.Session;
 import org.apache.activemq.ActiveMQConnectionFactory;
 import org.junit.jupiter.api.Assertions;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.test.context.SpringBootTest;
 
 import java.io.File;
 import java.sql.DriverManager;
@@ -21,24 +23,40 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 
+@SpringBootTest(classes = Application.class)
+@CucumberContextConfiguration
 public class StepDefinitions {
-    private final String jdbcUrl = "jdbc:oracle:thin:@localhost:1521/FREEPDB1";
-    private final String fallbackJdbcUrl = "jdbc:oracle:thin:@localhost:1521/FREE";
-    private final String dbUser = "SYSTEM";
-    private final String dbPass = "password123";
 
-    private final String brokerUrl = "tcp://localhost:61616";
-    private final String mqUser = "admin";
-    private final String mqPass = "admin";
+    @Value("${spring.datasource.url}")
+    private String jdbcUrl;
 
-    private String actualJdbcUrl;
-    private DatabaseClient dbClient;
+    @Value("${spring.datasource.username}")
+    private String dbUser;
+
+    @Value("${spring.datasource.password}")
+    private String dbPass;
+
+    @Value("${spring.activemq.broker-url}")
+    private String brokerUrl;
+
+    @Value("${spring.activemq.user}")
+    private String mqUser;
+
+    @Value("${spring.activemq.password}")
+    private String mqPass;
+
+    @Autowired
     private ActiveMqClient activeMqClient;
-    private PipelineDispatcher dispatcher;
+
     private File testStdfFile;
+    private static boolean initialized = false;
 
     @Given("the OracleDB and ActiveMQ services are running")
     public void verifyingServicesAreRunning() throws Exception {
+        if (initialized) {
+            return;
+        }
+
         System.out.println("Checking and waiting for ActiveMQ and OracleDB...");
 
         // Wait for ActiveMQ
@@ -60,47 +78,36 @@ public class StepDefinitions {
 
         // Wait for OracleDB
         boolean dbReady = false;
-        String chosenUrl = jdbcUrl;
         for (int i = 0; i < 90; i++) {
-            try (java.sql.Connection conn = DriverManager.getConnection(chosenUrl, dbUser, dbPass)) {
+            try (java.sql.Connection conn = DriverManager.getConnection(jdbcUrl, dbUser, dbPass)) {
                 dbReady = true;
-                actualJdbcUrl = chosenUrl;
                 break;
             } catch (Exception e) {
-                // Try fallback URL if the first fails
-                try (java.sql.Connection conn = DriverManager.getConnection(fallbackJdbcUrl, dbUser, dbPass)) {
-                    dbReady = true;
-                    actualJdbcUrl = fallbackJdbcUrl;
-                    break;
-                } catch (Exception e2) {
-                    System.out.println("Waiting for OracleDB (" + i + "/90): " + e.getMessage());
-                    Thread.sleep(2000);
-                }
+                System.out.println("Waiting for OracleDB (" + i + "/90): " + e.getMessage());
+                Thread.sleep(2000);
             }
         }
         Assertions.assertTrue(dbReady, "OracleDB is not ready");
 
-        System.out.println("Services are ready. Initializing DB schema...");
-        // Clean up schema for a fresh test run
-        try (java.sql.Connection conn = DriverManager.getConnection(actualJdbcUrl, dbUser, dbPass);
+        System.out.println("Services are ready. Purging database records for test run...");
+        
+        // Purge records to ensure fresh test state, without dropping tables since Spring Boot/Hibernate auto-creates them on start.
+        try (java.sql.Connection conn = DriverManager.getConnection(jdbcUrl, dbUser, dbPass);
              Statement stmt = conn.createStatement()) {
             try {
-                stmt.execute("DROP TABLE TEST_RESULTS");
+                stmt.execute("DELETE FROM TEST_RESULTS");
             } catch (Exception ignored) {}
             try {
-                stmt.execute("DROP TABLE STDF_LOTS");
+                stmt.execute("DELETE FROM STDF_LOTS");
             } catch (Exception ignored) {}
         }
-
-        dbClient = new DatabaseClient(actualJdbcUrl, dbUser, dbPass);
-        
-        dbClient.initializeSchema();
-        activeMqClient = new ActiveMqClient(brokerUrl, mqUser, mqPass);
 
         // Drain queues before starting the test
         drainQueue("stdf.test.results");
         drainQueue("stdf.lot.meta");
         drainQueue("stdf.lot.summary");
+        
+        initialized = true;
     }
 
     @Given("a mock STDF binary file {string} exists with lot {string} and {int} parametric tests")
@@ -109,28 +116,25 @@ public class StepDefinitions {
         System.out.println("Generating mock STDF binary at: " + testStdfFile.getAbsolutePath());
         
         try (StdfTestWriter writer = new StdfTestWriter(testStdfFile.getAbsolutePath())) {
-            // Write FAR (CPU 2 = VAX, version 4)
             writer.writeFar(2, 4);
-            // Write MIR
             writer.writeMir(lotId, "DEMO_DEVICE", "JOB_Ingestion", "ANTIGRAVITY", 1780000000L, 1780000000L);
-            // Write PTRs
             for (int i = 1; i <= numTests; i++) {
                 writer.writePtr(i, 1, 1, 1.23f + i, "PARAM_TEST_" + i, 0.0f, 1000.0f);
             }
-            // Write MRR
             writer.writeMrr(1780000000L + 3600, "P", "Passed without issues", "");
         }
     }
 
     @When("the STDF pipeline ingests {string}")
     public void ingestStdfFile(String filename) throws Exception {
-        dispatcher = new PipelineDispatcher(dbClient, activeMqClient, 10);
-        dispatcher.ingest(testStdfFile.getAbsolutePath());
+        activeMqClient.publishFilePath("stdf.file.ingest", testStdfFile.getAbsolutePath());
+        // Wait a few seconds for the asynchronous consumer to process the file and insert into DB
+        Thread.sleep(5000);
     }
 
     @Then("{int} lot record for {string} should be present in OracleDB")
     public void verifyLotRecordInDb(int expectedCount, String lotId) throws Exception {
-        try (java.sql.Connection conn = DriverManager.getConnection(actualJdbcUrl, dbUser, dbPass);
+        try (java.sql.Connection conn = DriverManager.getConnection(jdbcUrl, dbUser, dbPass);
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery("SELECT count(*) FROM STDF_LOTS WHERE LOT_ID = '" + lotId + "'")) {
             rs.next();
@@ -141,7 +145,7 @@ public class StepDefinitions {
 
     @Then("{int} test results for lot {string} should be present in OracleDB")
     public void verifyTestResultsInDb(int expectedCount, String lotId) throws Exception {
-        try (java.sql.Connection conn = DriverManager.getConnection(actualJdbcUrl, dbUser, dbPass);
+        try (java.sql.Connection conn = DriverManager.getConnection(jdbcUrl, dbUser, dbPass);
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery("SELECT count(*) FROM TEST_RESULTS WHERE LOT_ID = '" + lotId + "'")) {
             rs.next();
