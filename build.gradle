@@ -1,0 +1,50 @@
+plugins {
+    id 'java'
+}
+
+group = 'com.ntnn'
+version = '1.0-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // ActiveMQ / JMS
+    implementation 'org.apache.activemq:activemq-client:6.1.2'
+    implementation 'jakarta.jms:jakarta.jms-api:3.1.0'
+
+    // Oracle
+    implementation 'com.oracle.database.jdbc:ojdbc11:23.3.0.23.09'
+    implementation 'com.zaxxer:HikariCP:5.1.0'
+
+    // JSON parsing
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.0'
+
+    // Testing
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'io.cucumber:cucumber-java:7.16.1'
+    testImplementation 'io.cucumber:cucumber-junit-platform-engine:7.16.1'
+    testImplementation 'org.junit.platform:junit-platform-suite'
+    
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += ["--enable-preview"]
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+    systemProperty "cucumber.junit-platform.naming-strategy", "long"
+    systemProperty "cucumber.glue", "com.ntnn"
+    jvmArgs += ["--enable-preview"]
+}
+

@@ -1,0 +1,28 @@
+services:
+  oracledb:
+    image: container-registry.oracle.com/database/free:latest
+    container_name: oracledb
+    ports:
+      - "1521:1521"
+    environment:
+      - ORACLE_PASSWORD=password123
+    healthcheck:
+      test: ["CMD-SHELL", "ls /opt/oracle/oradata/FREE/system01.dbf || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  activemq:
+    image: apache/activemq-classic:latest
+    container_name: activemq
+    ports:
+      - "61616:61616"
+      - "8161:8161"
+    environment:
+      - ACTIVEMQ_ADMIN_USER=admin
+      - ACTIVEMQ_ADMIN_PASSWORD=admin
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "61616"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
